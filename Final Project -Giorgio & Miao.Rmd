@@ -1,0 +1,511 @@
+---
+title: "Final Project - Giorgio & Miao"
+author: "Giorgio Rivoli"
+date: "2024-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The aim of this analysis is to use RSelenium to retrieve from the [official Vatican website](https://www.vatican.va/holy_father/index_it.htm) the speeches given during the Angelus by the four most recent Popes: Pope Francis, Pope Benedict XVI, Pope John Paul II, and Pope John Paul I. Indeed, English texts are available only for these Popes, unfortunately not for all the preceding ones. Subsequently, we will conduct a text analysis on these speeches to identify which Pope shows a clear political inclination.
+
+Before proceeding, we will import all the libraries that might be useful for the analysis.
+
+```{r}
+library(RSelenium)
+library(wdman)
+library(netstat)
+library(scrapex)
+library(xml2)
+library(rvest)
+library(magrittr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+```
+
+# STEP 1: Function setting
+
+Now let's proceed with creating a function in R that utilizes the RSelenium package to retrieve the texts of the Angelus prayers from the Vatican websites related to the speeches of the Popes. The function is structured to navigate through the web pages, find the appropriate links, and extract the desired texts. Specifically:
+
+ - The function get_english_angelus_texts is defined, accepting a parameter url representing the URL of the Vatican website.
+
+- A WebDriver is created using the rsDriver function from RSelenium. This WebDriver will be used to interact with the browser (Firefox) and navigate the website.
+
+- After obtaining the driver, the function navigates it to the provided URL.
+
+- An empty list named angelus_texts_pope is initialized to store the texts of the Angelus prayers for each Pope.
+
+- A list of links to the Popes' speeches is identified using an XPath expression that filters the desired links. The selected links must start with a character other than "/" or "i" and contain the word "index".
+
+- A loop is started to iterate over the links of the Popes. If the number of the Pope exceeds 4, the loop is terminated. This is established as we have previously verified that English speeches are available only for the first 4 Popes.
+
+- For each Pope, the function clicks on the corresponding Pope's link (and waits for a second).
+
+- A link to the Angelus prayer is searched within the Pope's page. If Angelus prayers are available, the function proceeds.
+
+- If links to the English version of the Angelus prayer are present, the function clicks on them, extracts the text of the Angelus prayer, and saves it in the list pope_texts.
+
+- If there are multiple pages of Angelus prayers for a specific year, the function navigates through these pages and repeats the text extraction process.
+
+- Finally, the texts of the Angelus prayers for each Pope are stored in the list angelus_texts_pope, using a label that identifies the Pope.
+
+- Ultimately, the function returns the list of Angelus prayer texts for all the Popes.
+
+```{r}
+get_english_angelus_texts <- function(url) {
+  rD <- rsDriver(browser = "firefox", 
+                 port = 4558L, 
+                 verbose = FALSE,
+                 chromever = NULL)
+  
+  driver <- rD$client
+  
+  driver$navigate(url)
+  
+  angelus_texts_pope <- list()  # Lista per memorizzare i discorsi di ogni papa
+  
+  pope_links <- driver$findElements(using = "xpath", value = "//tr//a[substring(@href, 1, 1) != '/' and substring(@href, 1, 1) != 'i' and contains(@href, 'index')]")
+  
+  for (p in 1:length(pope_links)) { 
+    if (p > 4) {
+      break  # Interrompi il ciclo se si supera il quarto papa
+    }
+    
+    print(paste0("Clicking on Pope ", p))
+    pope_texts <- list()  # Lista per memorizzare i discorsi di un singolo papa
+    pope_links <- driver$findElements(using = "xpath", value = "//tr//a[substring(@href, 1, 1) != '/' and substring(@href, 1, 1) != 'i' and contains(@href, 'index')]")
+    pope_links[[p]]$clickElement()
+    
+    Sys.sleep(1)
+    
+    click_links <- driver$findElement(using = "xpath", value = "//li//a[contains(@href, 'angelus.index.html')]")
+    
+    if (length(click_links) != 0) {
+      print("There are Angelus")
+      driver$findElement(using = "xpath", value = "//li//a[contains(@href, 'angelus.index.html')]")$clickElement()
+      
+      english_links <- driver$findElements(using = "xpath", value = "//a[contains(text(), 'Inglese')]")
+      
+      if (length(english_links) != 0) {
+        print("There are english text without years")
+        for (s in 1:length(english_links)) {
+          print(paste0("Clicking on english link ", s))
+          english_links <- driver$findElements(using = "xpath", value = "//a[contains(text(), 'Inglese')]")
+          english_links[[s]]$clickElement()
+          Sys.sleep(1)
+          angelus_text <- driver$findElement(using = "xpath", value = "//div[starts-with(@class, 'text parbase')]")$getElementText()
+          pope_texts <- c(pope_texts, list(angelus_text))
+          driver$goBack()
+        }
+        driver$goBack()
+        print("Come back to main page")
+        driver$findElement(using = "xpath", value = "//div[contains(@class, 'item')]//a[contains(@href, 'holy_father')]")$clickElement()
+      }
+      
+      years_links <- driver$findElements(using = "xpath", value = "(//ul[@path='angelus']//li)")
+      
+      if (length(years_links) != 0) {
+        print("There are years")
+        num_years <- length(years_links)
+        for (k in 1:num_years) {
+          print(paste0("Clicking on year ", k))
+          print(paste0("Clicking on page 1"))
+          years_links <- driver$findElements(using = "xpath", value = "(//ul[@path='angelus']//li)")
+          years_links[[k]]$clickElement()
+          Sys.sleep(1)
+          english_links <- driver$findElements(using = "xpath", value = "//a[contains(text(), 'Inglese')]")
+          
+          if (length(english_links) != 0) {
+            for (i in 1:length(english_links)) {
+              print(paste0("Clicking on english link ", i))
+              english_links <- driver$findElements(using = "xpath", value = "//a[contains(text(), 'Inglese')]")
+              english_links[[i]]$clickElement()
+              Sys.sleep(1)
+              angelus_text <- driver$findElement(using = "xpath", value = "//div[starts-with(@class, 'text parbase')]")$getElementText()
+              pope_texts <- c(pope_texts, list(angelus_text))
+              driver$goBack()
+            }
+          }
+          
+          pages_links <- driver$findElements(using = "xpath", value = "(//a[@class='btn'])")
+          
+          if (length(pages_links) != 0) {
+            print("There are more pages")
+            num_pages <- length(pages_links)
+            for (l in 1:num_pages) {
+              print(paste0("Clicking on page ", l + 1))
+              pages_links <- driver$findElements(using = "xpath", value = "(//a[@class='btn'])")
+              pages_links[[l]]$clickElement()
+              Sys.sleep(1)
+              english_links <- driver$findElements(using = "xpath", value = "//a[contains(text(), 'Inglese')]")
+              
+              if (length(english_links) != 0) {
+                for (j in 1:length(english_links)) {
+                  print(paste0("Clicking on english link ", j))
+                  english_links <- driver$findElements(using = "xpath", value = "//a[contains(text(), 'Inglese')]")
+                  english_links[[j]]$clickElement()
+                  Sys.sleep(1)
+                  angelus_text <- driver$findElement(using = "xpath", value = "//div[starts-with(@class, 'text parbase')]")$getElementText()
+                  pope_texts <- c(pope_texts, list(angelus_text))
+                  driver$goBack()
+                }
+              }
+            }
+          }
+        } 
+        driver$goBack()
+        driver$findElement(using = "xpath", value = "//div[contains(@class, 'item')]//a[contains(@href, 'holy_father')]")$clickElement()
+      }
+    }
+    angelus_texts_pope[[paste0("pope_", p)]] <- pope_texts  # Aggiungi la lista dei discorsi del papa alla lista principale
+  }
+  
+  return(angelus_texts_pope)
+}
+```
+
+# STEP 2: Data collection
+
+In the following code, an URL is assigned to the variable url. This URL leads to the main page of the Vatican website for the Holy Father (Pope) in Italian. Subsequently, the function get_english_angelus_texts is called with this URL as an argument. This function, as described previously, is designed to retrieve the texts of the Angelus prayers from Vatican websites related to the speeches of the Popes. The result of this function call is then stored in the variable all_english_angelus_texts, containing the texts of the Angelus prayers in English for all available Popes, obtained from the provided URL.
+
+```{r}
+url <- "https://www.vatican.va/holy_father/index_it.htm"
+all_english_angelus_texts <- get_english_angelus_texts(url)
+```
+
+# STEP 3: Saving the texts as txt files
+
+Finally, first, we define a list of output file names output_files, containing the names of the files where the contents obtained from the analysis will be written. Then, we use the lapply function to iterate through the elements of the list all_english_angelus_texts, which contains the texts of the Angelus prayers in English for various Popes. Next, for each element of the list all_english_angelus_texts, an anonymous function is executed, defined within lapply. This function takes the current index of the element (i) as an argument. Inside the anonymous function:
+
+- The current list of texts of the Angelus prayers is selected using the indexing operation all_english_angelus_texts[[i]].
+
+- The content of the current list is converted into a vector using unlist. 
+
+- The texts of the Angelus prayers, now present as a vector of strings, are written to the corresponding output file using writeLines. The output file name is taken from the output_files list, with the index i corresponding to the current element of the list all_english_angelus_texts.
+
+```{r}
+output_files <- c("pope_francis.txt", "pope_benedict.txt", "pope_johnpaulII.txt", "pope_johnpaulI.txt")
+
+lapply(seq_along(all_english_angelus_texts), function(i) {
+  current_list <- all_english_angelus_texts[[i]]
+  
+  writeLines(unlist(current_list), output_files[i])
+})
+```
+
+# TEXT MINING ANALYSIS
+
+As mentioned, once all the texts have been collected, we can proceed with our text analysis. To do this, let's first download the libraries that may be needed.
+
+```{r}
+library(tidytext)
+library(ggplot2)
+```
+
+With the following code, we read the content of the four text files where the speeches of the popes are stored and store it in four different variables:
+
+```{r}
+francis_lines <- readLines("pope_francis.txt")
+benedict_lines <- readLines("pope_benedict.txt")
+jpii_lines <- readLines("pope_johnpaulII.txt")
+johnpauli_lines <- readLines("pope_johnpaulI.txt")
+```
+
+The following code instead creates four different variables of type data frame, each containing the text of speeches by a specific Pope. These data frames contain two columns: "text" and "pope". The "text" column contains the text of Pope Francis' speeches, which was previously read from the "txt" file. The "pope" column, instead, contains the Pope's name.
+
+```{r}
+data_francis <- data.frame(text = francis_lines, pope = "Francis", stringsAsFactors = FALSE)
+data_benedict <- data.frame(text = benedict_lines, pope = "Benedict XVI", stringsAsFactors = FALSE)
+data_jpii <- data.frame(text = jpii_lines, pope = "John Paul II", stringsAsFactors = FALSE)
+data_johnpauli <- data.frame(text = johnpauli_lines, pope = "John Paul I", stringsAsFactors = FALSE)
+```
+
+Now let's start our analysis, beginning with Pope Francis.
+
+The following code tokenizes the text of Pope Francis' speeches, splitting them into tokens, i.e., individual words, creating a new column called "word" in the data frame data_francis. The strip_punct = FALSE function indicates to retain punctuation in the text, so each word will also be separated by punctuation. The count function, on the other hand, counts the number of occurrences of each word in Pope Francis' speeches, sorting them in descending order of frequency. The result is a new data frame containing two columns: "word," representing the words found in the speeches, and "n," representing the number of occurrences of each word.
+
+```{r}
+data_francis <- data_francis |> 
+  unnest_tokens(word, text, strip_punct = FALSE) |> 
+  count(word, sort = TRUE)
+```
+
+The following code performs an anti_join operation, which compares the dataframe data_francis with another dataframe called stop_words and removes the rows from data_francis that match the rows of stop_words based on a common key. In this case, stop_words contains a list of common words that need to be excluded from the text analysis.
+
+```{r}
+data_francis <- data_francis |> 
+  anti_join(stop_words)
+```
+
+The following code helps to remove or include specific words or types of words from the text, further cleaning the dataset for subsequent analysis.
+
+```{r}
+data_francis <- data_francis |> 
+  filter(!grepl("^\\d+", word) &  
+           !grepl("^_", word) & 
+           !grepl("[[:punct:]]", word) & 
+           !grepl("\\b(?:cf|Jn|v|benedict|XVI|Copyright|Libreria|Editrice|Vaticana|angelus|Peter|©)\\b", word, ignore.case = TRUE) &
+           !grepl("\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\b", word, ignore.case = TRUE) &
+           !grepl("\\bvv\\b", word) &  
+           !grepl("^x", word) &   
+           !grepl("\\bh\\.b\\b", word, ignore.case = TRUE) &   
+           !grepl("\\bh\\.e\\b", word, ignore.case = TRUE)) 
+```
+
+The code performs a transformation using the mutate function on the data frame data_francis. Specifically, it calculates the sum of the values in the "n" column (which represents the number of occurrences of each word in Pope Francis' speeches) and assigns this value to the new column called "total".
+
+```{r}
+data_francis <- data_francis |> 
+  mutate(total = sum(n))
+```
+
+The code divides the number of occurrences of each word (stored in the column "n") by the total number of occurrences of all words in the speeches of Pope Francis (stored in the column "total") and then assigns the result of this division to a new column called "term_frequency" in the data frame data_francis.
+
+```{r}
+data_francis <- data_francis |> 
+  mutate(term_frequency = n / total)
+```
+
+The code defines a vector of keywords that contains a list of words relevant for text analysis. Specifically, the keywords can be used to identify and analyze political topics within texts. Indeed, the listed keywords include a wide range of topics, such as politics, environment, human rights, global conflicts, public health, and many others.
+
+```{r}
+key_words <- c("war", "migration", "immigration", "environment", "climate", 
+                   "rights", "poverty", "social", "justice", "interreligious", "civil", 
+                   "globalization", "sustainability", "economic", "crisis", "social", 
+                   "inclusion", "ecclesiastical", "reforms", "islam", "terrorism", 
+                   "europe", "secularization", "bioethics", "abortion", "euthanasia", 
+                   "ecumenism", "international", "fundamentalism", "capitalism", 
+                   "materialism", "money", "communism", "cold war", "solidarity", "nazism", 
+                   "ethics", "politics", "iraq", "afghanistan", "libya", "finance", 
+                   "arabia", "tunisia", "egypt", "yemen", "obama", "iran", "weapons", 
+                   "weapon", "nuclear", "syria", "politics", "geopolitics", "borders", 
+                   "nato", "america", "gorbachev", "putin", "zelensky", "soviet", "poland", 
+                   "hungary", "germany", "east", "cuba", "missiles", "wall", "berlin", 
+                   "gulf", "kuwait", "twin", "towers", "qaeda", "military", "commerce", 
+                   "pedophilia", "conflicts", "yugoslavia", "rwanda", "sierra leone", 
+                   "instability", "refugees", "russia", "crimea", "paris", "gay", 
+                   "mediterranean", "venezuela", "myanmar", "brazil", "hong", 
+                   "fire", "pandemic", "covid", "coronavirus", "virus", "gender", 
+                   "homosexuality", "sex", "marriage", "divorce", "suicide", 
+                   "contraception", "reproductive", "reproduction", "gender", 
+                   "procreation", "wealth", "distribution", "inequality", "wwf", "tragedy", 
+                   "transgender", "slogan", "negotiate", "negotiated", 
+                   "negotiates", "negotiating", "negotiation", "negotiations", 
+                   "mozambique", "migrate", "migrations", "massacre", "massacred", "massacres", "marriage", "lockdown", "libyan", "liberia", "inhumanity", "individualism", "holocaust", "economy", "corruption", "cooperation", "ceasefire", "beirut", "auschwitz")
+```
+
+The code creates a new dataframe called "politics_francis" by performing the following operations: it filters the dataframe "data_francis" including only the rows where the word column (word) matches any word in the vector of keywords (parole_chiave); it arranges the filtered dataframe in descending order of term frequency (term_frequency). This means that words with the highest term frequency, i.e., the words that appear most frequently in Pope Francis' speeches and also match the keywords, will appear at the top of the dataframe.
+
+```{r}
+politics_francis <- data_francis |> 
+  filter(word %in% key_words) |> 
+  arrange(desc(term_frequency))
+```
+
+Once done, we'll create a bar chart that shows the frequency of political words in Pope Francis's Angelus. The top 10 words are represented based on their frequency, with the height of the bars indicating how often they appear in the text.
+
+```{r}
+ggplot(head(politics_francis, 10), aes(x = term_frequency, y = reorder(word, term_frequency))) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Frequency of political words in Angelus - Pope Francis",
+       x = "Term Frequency",
+       y = NULL) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic", color = "black", size = 12),
+        axis.text.x = element_text(face = "bold", color = "black", size = 12),
+        axis.line = element_line(color = "black"),
+        plot.title = element_text(hjust = 0.5, size = 16))
+```
+
+
+As one might expect, due to conflicts in Ukraine and Gaza, the most frequently political word used by Pope Francis is "war". 
+
+Now let's perform the same code for Pope Benedict. In fact, we'll just briefly comment on the graph.
+
+```{r}
+data_benedict <- data_benedict |> 
+  unnest_tokens(word, text, strip_punct = FALSE) |> 
+  count(word, sort = TRUE)
+
+data_benedict <- data_benedict |> 
+  anti_join(stop_words)
+
+data_benedict <- data_benedict |> 
+  filter(!grepl("^\\d+", word) & 
+           !grepl("^_", word) &   
+           !grepl("[[:punct:]]", word) &   
+           !grepl("\\b(?:cf|Jn|v|benedict|XVI|Copyright|Libreria|Editrice|Vaticana|angelus|Peter|©)\\b", word, ignore.case = TRUE) &
+           !grepl("\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\b", word, ignore.case = TRUE) &
+           !grepl("\\bvv\\b", word) &  
+           !grepl("^x", word) &   
+           !grepl("\\bh\\.b\\b", word, ignore.case = TRUE) &   
+           !grepl("\\bh\\.e\\b", word, ignore.case = TRUE))   
+
+data_benedict <- data_benedict |> 
+  mutate(total = sum(n))
+
+data_benedict <- data_benedict |> 
+  mutate(term_frequency = n / total)
+
+politics_benedict <- data_benedict |> 
+  filter(word %in% key_words) |> 
+  arrange(desc(term_frequency))
+```
+
+```{r}
+ggplot(head(politics_benedict, 10), aes(x = term_frequency, y = reorder(word, term_frequency))) +
+  geom_bar(stat = "identity", fill = "pink") +
+  labs(title = "Frequency of political words in Angelus - Pope Benedict XVI",
+       x = "Term Frequency",
+       y = NULL) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic", color = "black", size = 12),
+        axis.text.x = element_text(face = "bold", color = "black", size = 12),
+        axis.line = element_line(color = "black"),
+        plot.title = element_text(hjust = 0.5, size = 16))
+
+```
+In this case, we notice that the word "war" is only in the eighth position. Instead, words like solidarity or poverty are more frequently used. This could be due to the fact that Benedict XVI held the papacy during the major subprime crisis that shook global finance and economy.
+
+Now let's move on to Pope John Paul II.
+
+```{r}
+data_jpii <- data_jpii |> 
+  unnest_tokens(word, text, strip_punct = FALSE) |> 
+  count(word, sort = TRUE)
+
+data_jpii <- data_jpii |> 
+  anti_join(stop_words)
+
+data_jpii <- data_jpii |> 
+  filter(!grepl("^\\d+", word) &  
+           !grepl("^_", word) &   
+           !grepl("[[:punct:]]", word) &  
+           !grepl("\\b(?:cf|Jn|v|benedict|XVI|Copyright|Libreria|Editrice|Vaticana|angelus|Peter|©)\\b", word, ignore.case = TRUE) &
+           !grepl("\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\b", word, ignore.case = TRUE) &
+           !grepl("\\bvv\\b", word) &   
+           !grepl("^x", word) &   
+           !grepl("\\bh\\.b\\b", word, ignore.case = TRUE) &   
+           !grepl("\\bh\\.e\\b", word, ignore.case = TRUE))   
+
+data_jpii <- data_jpii |> 
+  mutate(total = sum(n))
+
+data_jpii <- data_jpii |> 
+  mutate(term_frequency = n / total)
+
+politics_jpii <- data_jpii |> 
+  filter(word %in% key_words) |> 
+  arrange(desc(term_frequency))
+```
+
+```{r}
+ggplot(head(politics_jpii, 10), aes(x = term_frequency, y = reorder(word, term_frequency))) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(title = "Frequency of political words in Angelus - Pope John Paul II",
+       x = "Term Frequency",
+       y = NULL) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic", color = "black", size = 12),
+        axis.text.x = element_text(face = "bold", color = "black", size = 12),
+        axis.line = element_line(color = "black"),
+        plot.title = element_text(hjust = 0.5, size = 16))
+```
+As for John Paul II, we can see how this pope also frequently appealed to values such as justice and solidarity. However, we can also notice a particular focus on Europe. This could be due to the fact that, during his papacy, a historical event like the fall of the Berlin Wall occurred.
+
+Finally, let's move on to analyzing Pope John Paul I.
+
+```{r}
+data_johnpauli <- data_johnpauli |> 
+  unnest_tokens(word, text, strip_punct = FALSE) |> 
+  count(word, sort = TRUE)
+
+data_johnpauli <- data_johnpauli |> 
+  anti_join(stop_words)
+
+data_johnpauli <- data_johnpauli |> 
+  filter(!grepl("^\\d+", word) &  
+           !grepl("^_", word) &   
+           !grepl("[[:punct:]]", word) &   
+           !grepl("\\b(?:cf|Jn|v|benedict|XVI|Copyright|Libreria|Editrice|Vaticana|angelus|Peter|©)\\b", word, ignore.case = TRUE) &
+           !grepl("\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\b", word, ignore.case = TRUE) &
+           !grepl("\\bvv\\b", word) &   
+           !grepl("^x", word) &   
+           !grepl("\\bh\\.b\\b", word, ignore.case = TRUE) &   
+           !grepl("\\bh\\.e\\b", word, ignore.case = TRUE)) 
+
+data_johnpauli <- data_johnpauli |> 
+  mutate(total = sum(n))
+
+data_johnpauli <- data_johnpauli |> 
+  mutate(term_frequency = n / total)
+
+politics_johnpauli <- data_johnpauli |> 
+  filter(word %in% key_words) |> 
+  arrange(desc(term_frequency))
+```
+
+```{r}
+ggplot(head(politics_johnpauli, 10), aes(x = term_frequency, y = reorder(word, term_frequency))) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  labs(title = "Frequency of political words in Angelus - Pope John Paul I",
+       x = "Term Frequency",
+       y = NULL) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic", color = "black", size = 12),
+        axis.text.x = element_text(face = "bold", color = "black", size = 12),
+        axis.line = element_line(color = "black"),
+        plot.title = element_text(hjust = 0.5, size = 16))
+```
+
+The analysis of this last pope is distorted by the scarcity of texts available. In fact, this pope was in office for only 33 days. From this graph, we can infer that during his 4 Angelus addresses, Pope John Paul I addressed themes related to tensions existing between America and the Middle East, particularly Iran.
+
+Finally, let's attempt to make a comparison among the four popes to determine which of them is the most political.
+
+The following code combines the four data frames containing the most frequent political words for each Pope into a single data frame called "total_politics". Each data frame is preceded by a mutate transformation to add a column called "pope" that identifies the associated Pope for each row of data.
+
+```{r}
+total_politics <- bind_rows(politics_francis %>% mutate(pope = "Francis"),
+                            politics_benedict %>% mutate(pope = "Benedict XVI"),
+                            politics_jpii %>% mutate(pope = "John Paul II"),
+                            politics_johnpauli %>% mutate(pope = "John Paul I"))
+```
+
+The following code calculates the total term frequency for each Pope by summing up the term frequencies of all political words, and then arranges the results in descending order of total term frequency.
+
+```{r}
+total_politics <- total_politics %>%
+  group_by(pope) %>%
+  summarize(total_term_frequency = sum(term_frequency) * 100) %>%
+  arrange(desc(total_term_frequency))
+```
+
+Finally, we create a bar chart displaying the ranking of the most political popes, sorted by the total frequency of political terms in their speeches. The colors of the bars are defined based on the pope, with Francis in light blue, Benedict XVI in pink, John Paul II in red, and John Paul I in dark green. The scale on the x-axis shows the total frequency of political terms as a percentage. The legend is hidden to avoid confusion.
+
+```{r}
+color_map <- c("Francis" = "lightblue", "Benedict XVI" = "pink", "John Paul II" = "red", "John Paul I" = "darkgreen")
+
+ggplot(total_politics, aes(x = total_term_frequency, y = reorder(pope, total_term_frequency), fill = pope)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = color_map) + 
+  labs(title = "Ranking of the most political popes",
+       x = "Total Term Frequency (%)",
+       y = "Popes") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(face = "italic", color = "black", size = 12),
+        axis.text.x = element_text(face = "bold", color = "black", size = 12),
+        axis.line = element_line(color = "black"),
+        plot.title = element_text(hjust = 0.5, size = 16)) +
+  scale_x_continuous(labels = scales::percent_format(scale = 1),
+                     breaks = seq(0, 2.5, by = 0.25)) +
+  guides(fill = FALSE)
+```
+
+From the graph, we can notice that Pope John Paul II is the most political pope, followed by Pope Francis, then Benedict XVI, and finally we find Pope John Paul I. This graph seems to reflect somewhat the common sentiment about the different popes. In fact, Pope John Paul II and Pope Francis are among the popes most associated with society, seen as figures attentive to current events and the challenges of the world, and not only dedicated to religious practices.
+
+
+
+
